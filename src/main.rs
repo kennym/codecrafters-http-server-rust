@@ -1,5 +1,5 @@
 use std::net::{TcpListener, TcpStream};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write, Read};
 use std::collections::HashMap;
 use std::thread;
 
@@ -7,7 +7,8 @@ use std::thread;
 struct Request {
     path: String,
     headers: HashMap<String, String>,
-    _method: String,
+    method: String,
+    body: String,
 }
 
 struct Response {
@@ -56,59 +57,88 @@ fn parse_request(reader: &mut BufReader<&mut std::net::TcpStream>) -> Request {
             headers.insert(key.to_string(), value.to_string());
         }
     }
+
+    // Read body if Content-Length is present
+    let mut body = String::new();
+    if let Some(content_length) = headers.get("Content-Length") {
+        let content_length: usize = content_length.parse().unwrap_or(0);
+        let mut buffer = vec![0; content_length];
+        reader.read_exact(&mut buffer).unwrap();
+        body = String::from_utf8_lossy(&buffer).to_string();
+    }
     
     Request {
-        _method: parts[0].to_string(),
+        method: parts[0].to_string(),
         path: parts[1].to_string(),
         headers,
+        body,
     }
 }
 
 fn handle_request(request: &Request, directory: &str) -> Response {
-    if request.path == "/" {
-        Response::new(
+    match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/") => Response::new(
             "HTTP/1.1 200 OK",
             "text/html",
             "<h1>Hello, World!</h1>"
-        )
-    } else if request.path.starts_with("/echo/") {
-        let echo_text = request.path.strip_prefix("/echo/").unwrap();
-        Response::new(
-            "HTTP/1.1 200 OK",
-            "text/plain",
-            echo_text
-        )
-    } else if request.path.starts_with("/files/") {
-        // Add debug print to see what paths we're trying
-        let file_path = format!("{}/{}", directory, request.path.strip_prefix("/files/").unwrap());
-        println!("Trying to read file from: {}", file_path);  // Debug print
-        
-        let file_content = match std::fs::read_to_string(file_path) {
-            Ok(content) => content,
-            Err(e) => {
-                println!("Error reading file: {:?}", e);  // Debug print
-                return Response::new(
-                    "HTTP/1.1 404 Not Found",
+        ),
+        ("GET", path) if path.starts_with("/echo/") => {
+            let echo_text = path.strip_prefix("/echo/").unwrap();
+            Response::new(
+                "HTTP/1.1 200 OK",
+                "text/plain",
+                echo_text
+            )
+        },
+        ("GET", path) if path.starts_with("/files/") => {
+            let file_path = format!("{}/{}", directory, path.strip_prefix("/files/").unwrap());
+            println!("Trying to read file from: {}", file_path);
+            
+            match std::fs::read_to_string(file_path) {
+                Ok(content) => Response::new(
+                    "HTTP/1.1 200 OK",
+                    "application/octet-stream",
+                    &content
+                ),
+                Err(e) => {
+                    println!("Error reading file: {:?}", e);
+                    Response::new(
+                        "HTTP/1.1 404 Not Found",
+                        "text/plain",
+                        ""
+                    )
+                }
+            }
+        },
+        ("POST", path) if path.starts_with("/files/") => {
+            let file_path = format!("{}/{}", directory, path.strip_prefix("/files/").unwrap());
+            println!("Trying to write file to: {}", file_path);
+            
+            match std::fs::write(file_path, &request.body) {
+                Ok(_) => Response::new(
+                    "HTTP/1.1 201 Created",
                     "text/plain",
                     ""
-                );
+                ),
+                Err(e) => {
+                    println!("Error writing file: {:?}", e);
+                    Response::new(
+                        "HTTP/1.1 500 Internal Server Error",
+                        "text/plain",
+                        ""
+                    )
+                }
             }
-        };
-        Response::new(
-            "HTTP/1.1 200 OK",
-            "application/octet-stream",
-            &file_content
-        )
-    } else if request.path.starts_with("/user-agent") {
-        // Return the user agent in the response body
-        let user_agent = request.headers.get("User-Agent").unwrap();
-        Response::new(
-            "HTTP/1.1 200 OK",
-            "text/plain",
-            user_agent
-        )
-    } else {
-        Response::new(
+        },
+        ("GET", "/user-agent") => {
+            let user_agent = request.headers.get("User-Agent").unwrap();
+            Response::new(
+                "HTTP/1.1 200 OK",
+                "text/plain",
+                user_agent
+            )
+        },
+        _ => Response::new(
             "HTTP/1.1 404 Not Found",
             "text/plain",
             ""
