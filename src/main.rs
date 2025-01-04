@@ -14,6 +14,7 @@ struct Request {
 struct Response {
     status_line: String,
     content_type: String,
+    content_encoding: Option<String>,
     body: String,
 }
 
@@ -22,18 +23,33 @@ impl Response {
         Response {
             status_line: status_line.to_string(),
             content_type: content_type.to_string(),
+            content_encoding: None,
+            body: body.to_string(),
+        }
+    }
+
+    fn with_encoding(status_line: &str, content_type: &str, body: &str, encoding: &str) -> Response {
+        Response {
+            status_line: status_line.to_string(),
+            content_type: content_type.to_string(),
+            content_encoding: Some(encoding.to_string()),
             body: body.to_string(),
         }
     }
 
     fn to_string(&self) -> String {
-        format!(
-            "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
+        let mut headers = format!(
+            "{}\r\nContent-Type: {}\r\nContent-Length: {}",
             self.status_line,
             self.content_type,
             self.body.len(),
-            self.body
-        )
+        );
+        
+        if let Some(encoding) = &self.content_encoding {
+            headers.push_str(&format!("\r\nContent-Encoding: {}", encoding));
+        }
+        
+        format!("{}\r\n\r\n{}", headers, self.body)
     }
 }
 
@@ -75,31 +91,70 @@ fn parse_request(reader: &mut BufReader<&mut std::net::TcpStream>) -> Request {
     }
 }
 
+fn supports_gzip(request: &Request) -> bool {
+    request.headers.get("Accept-Encoding")
+        .map(|encodings| encodings.contains("gzip"))
+        .unwrap_or(false)
+}
+
 fn handle_request(request: &Request, directory: &str) -> Response {
+    let client_supports_gzip = supports_gzip(request);
+    
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => Response::new(
-            "HTTP/1.1 200 OK",
-            "text/html",
-            "<h1>Hello, World!</h1>"
-        ),
+        ("GET", "/") => {
+            if client_supports_gzip {
+                Response::with_encoding(
+                    "HTTP/1.1 200 OK",
+                    "text/html",
+                    "<h1>Hello, World!</h1>",
+                    "gzip"
+                )
+            } else {
+                Response::new(
+                    "HTTP/1.1 200 OK",
+                    "text/html",
+                    "<h1>Hello, World!</h1>"
+                )
+            }
+        },
         ("GET", path) if path.starts_with("/echo/") => {
             let echo_text = path.strip_prefix("/echo/").unwrap();
-            Response::new(
-                "HTTP/1.1 200 OK",
-                "text/plain",
-                echo_text
-            )
+            if client_supports_gzip {
+                Response::with_encoding(
+                    "HTTP/1.1 200 OK",
+                    "text/plain",
+                    echo_text,
+                    "gzip"
+                )
+            } else {
+                Response::new(
+                    "HTTP/1.1 200 OK",
+                    "text/plain",
+                    echo_text
+                )
+            }
         },
         ("GET", path) if path.starts_with("/files/") => {
             let file_path = format!("{}/{}", directory, path.strip_prefix("/files/").unwrap());
             println!("Trying to read file from: {}", file_path);
             
             match std::fs::read_to_string(file_path) {
-                Ok(content) => Response::new(
-                    "HTTP/1.1 200 OK",
-                    "application/octet-stream",
-                    &content
-                ),
+                Ok(content) => {
+                    if client_supports_gzip {
+                        Response::with_encoding(
+                            "HTTP/1.1 200 OK",
+                            "application/octet-stream",
+                            &content,
+                            "gzip"
+                        )
+                    } else {
+                        Response::new(
+                            "HTTP/1.1 200 OK",
+                            "application/octet-stream",
+                            &content
+                        )
+                    }
+                },
                 Err(e) => {
                     println!("Error reading file: {:?}", e);
                     Response::new(
@@ -132,11 +187,20 @@ fn handle_request(request: &Request, directory: &str) -> Response {
         },
         ("GET", "/user-agent") => {
             let user_agent = request.headers.get("User-Agent").unwrap();
-            Response::new(
-                "HTTP/1.1 200 OK",
-                "text/plain",
-                user_agent
-            )
+            if client_supports_gzip {
+                Response::with_encoding(
+                    "HTTP/1.1 200 OK",
+                    "text/plain",
+                    user_agent,
+                    "gzip"
+                )
+            } else {
+                Response::new(
+                    "HTTP/1.1 200 OK",
+                    "text/plain",
+                    user_agent
+                )
+            }
         },
         _ => Response::new(
             "HTTP/1.1 404 Not Found",
