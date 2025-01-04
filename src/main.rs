@@ -1,10 +1,11 @@
 use std::net::TcpListener;
 use std::io::Write;
 use std::io::{BufRead, BufReader};
-
+use std::collections::HashMap;
 #[derive(Debug)]
 struct Request {
     path: String,
+    headers: HashMap<String, String>,
     _method: String,
 }
 
@@ -34,11 +35,31 @@ impl Response {
     }
 }
 
-fn parse_request(request_line: &str) -> Request {
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
+fn parse_request(reader: &mut BufReader<&mut std::net::TcpStream>) -> Request {
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).unwrap();
+    let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
+    
+    let mut headers = HashMap::new();
+    loop {
+        let mut header_line = String::new();
+        reader.read_line(&mut header_line).unwrap();
+        
+        // Empty line signals end of headers
+        if header_line.trim().is_empty() {
+            break;
+        }
+        
+        // Parse header line
+        if let Some((key, value)) = header_line.trim().split_once(": ") {
+            headers.insert(key.to_string(), value.to_string());
+        }
+    }
+    
     Request {
         _method: parts[0].to_string(),
         path: parts[1].to_string(),
+        headers,
     }
 }
 
@@ -56,6 +77,14 @@ fn handle_request(request: &Request) -> Response {
             "text/plain",
             echo_text
         )
+    } else if request.path.starts_with("/user-agent") {
+        // Return the user agent in the response body
+        let user_agent = request.headers.get("User-Agent").unwrap();
+        Response::new(
+            "HTTP/1.1 200 OK",
+            "text/plain",
+            user_agent
+        )
     } else {
         Response::new(
             "HTTP/1.1 404 Not Found",
@@ -72,15 +101,13 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                let mut request_line = String::new();
                 let mut reader = BufReader::new(&mut stream);
-                reader.read_line(&mut request_line).unwrap();
-
-                let request = parse_request(request_line.trim());
+                let request = parse_request(&mut reader);
                 let response = handle_request(&request);
                 let response_string = response.to_string();
                 
-                println!("{}", response_string);
+                println!("Request: {:?}", request);
+                println!("Response: {}", response_string);
                 stream.write(response_string.as_bytes()).unwrap();
             }
             Err(e) => {
