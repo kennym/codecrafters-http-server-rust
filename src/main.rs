@@ -1,8 +1,7 @@
 use std::net::{TcpListener, TcpStream};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::collections::HashMap;
 use std::thread;
-use std::io::Write;
 
 #[derive(Debug)]
 struct Request {
@@ -65,7 +64,7 @@ fn parse_request(reader: &mut BufReader<&mut std::net::TcpStream>) -> Request {
     }
 }
 
-fn handle_request(request: &Request) -> Response {
+fn handle_request(request: &Request, directory: &str) -> Response {
     if request.path == "/" {
         Response::new(
             "HTTP/1.1 200 OK",
@@ -78,6 +77,27 @@ fn handle_request(request: &Request) -> Response {
             "HTTP/1.1 200 OK",
             "text/plain",
             echo_text
+        )
+    } else if request.path.starts_with("/files/") {
+        // Add debug print to see what paths we're trying
+        let file_path = format!("{}/{}", directory, request.path.strip_prefix("/files/").unwrap());
+        println!("Trying to read file from: {}", file_path);  // Debug print
+        
+        let file_content = match std::fs::read_to_string(file_path) {
+            Ok(content) => content,
+            Err(e) => {
+                println!("Error reading file: {:?}", e);  // Debug print
+                return Response::new(
+                    "HTTP/1.1 404 Not Found",
+                    "text/plain",
+                    ""
+                );
+            }
+        };
+        Response::new(
+            "HTTP/1.1 200 OK",
+            "application/octet-stream",
+            &file_content
         )
     } else if request.path.starts_with("/user-agent") {
         // Return the user agent in the response body
@@ -96,10 +116,10 @@ fn handle_request(request: &Request) -> Response {
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(mut stream: TcpStream, directory: String) {
     let mut reader = BufReader::new(&mut stream);
     let request = parse_request(&mut reader);
-    let response = handle_request(&request);
+    let response = handle_request(&request, &directory);
     let response_string = response.to_string();
     
     println!("Request: {:?}", request);
@@ -108,14 +128,22 @@ fn handle_connection(mut stream: TcpStream) {
 }
 
 fn main() {
+    // Handle `--directory` flag
+    let directory = std::env::args()
+        .collect::<Vec<String>>()
+        .windows(2)
+        .find(|args| args[0] == "--directory")
+        .map(|args| args[1].clone())
+        .unwrap_or(".".to_string());
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     println!("Listening on 127.0.0.1:4221");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let directory = directory.clone();
                 thread::spawn(move || {
-                    handle_connection(stream);
+                    handle_connection(stream, directory);
                 });
             }
             Err(e) => {
