@@ -9,8 +9,17 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                println!("returning 200");
-                stream.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap();
+                let status_line = "HTTP/1.1 200 OK\r\n";
+                let body = "";
+                let headers = [
+                    String::from("Content-Type: text/plain\r\n"),
+                    format!("Content-Length: {}\r\n", body.len()),
+                    String::from("\r\n")  // Empty line to separate headers from body
+                ].join("");
+
+                let response = format!("{}{}{}", status_line, headers, body);
+                println!("{}", response);
+                stream.write(response.as_bytes()).unwrap();
             }
             Err(e) => {
                 println!("error: {}", e);
