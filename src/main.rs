@@ -1,7 +1,9 @@
-use std::net::TcpListener;
-use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
+use std::thread;
+use std::io::Write;
+
 #[derive(Debug)]
 struct Request {
     path: String,
@@ -94,21 +96,27 @@ fn handle_request(request: &Request) -> Response {
     }
 }
 
+fn handle_connection(mut stream: TcpStream) {
+    let mut reader = BufReader::new(&mut stream);
+    let request = parse_request(&mut reader);
+    let response = handle_request(&request);
+    let response_string = response.to_string();
+    
+    println!("Request: {:?}", request);
+    println!("Response: {}", response_string);
+    stream.write(response_string.as_bytes()).unwrap();
+}
+
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     println!("Listening on 127.0.0.1:4221");
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut stream) => {
-                let mut reader = BufReader::new(&mut stream);
-                let request = parse_request(&mut reader);
-                let response = handle_request(&request);
-                let response_string = response.to_string();
-                
-                println!("Request: {:?}", request);
-                println!("Response: {}", response_string);
-                stream.write(response_string.as_bytes()).unwrap();
+            Ok(stream) => {
+                thread::spawn(move || {
+                    handle_connection(stream);
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
