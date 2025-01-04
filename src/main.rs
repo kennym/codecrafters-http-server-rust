@@ -2,6 +2,8 @@ use std::net::{TcpListener, TcpStream};
 use std::io::{BufRead, BufReader, Write, Read};
 use std::collections::HashMap;
 use std::thread;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 #[derive(Debug)]
 struct Request {
@@ -15,7 +17,7 @@ struct Response {
     status_line: String,
     content_type: String,
     content_encoding: Option<String>,
-    body: String,
+    body: Vec<u8>,
 }
 
 impl Response {
@@ -24,16 +26,24 @@ impl Response {
             status_line: status_line.to_string(),
             content_type: content_type.to_string(),
             content_encoding: None,
-            body: body.to_string(),
+            body: body.as_bytes().to_vec(),
         }
     }
 
     fn with_encoding(status_line: &str, content_type: &str, body: &str, encoding: &str) -> Response {
+        let body = if encoding == "gzip" {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(body.as_bytes()).unwrap();
+            encoder.finish().unwrap()
+        } else {
+            body.as_bytes().to_vec()
+        };
+
         Response {
             status_line: status_line.to_string(),
             content_type: content_type.to_string(),
             content_encoding: Some(encoding.to_string()),
-            body: body.to_string(),
+            body,
         }
     }
 
@@ -49,7 +59,7 @@ impl Response {
             headers.push_str(&format!("\r\nContent-Encoding: {}", encoding));
         }
         
-        format!("{}\r\n\r\n{}", headers, self.body)
+        format!("{}\r\n\r\n", headers)
     }
 }
 
@@ -214,11 +224,13 @@ fn handle_connection(mut stream: TcpStream, directory: String) {
     let mut reader = BufReader::new(&mut stream);
     let request = parse_request(&mut reader);
     let response = handle_request(&request, &directory);
-    let response_string = response.to_string();
     
-    println!("Request: {:?}", request);
-    println!("Response: {}", response_string);
-    stream.write(response_string.as_bytes()).unwrap();
+    // Write headers
+    let response_string = response.to_string();
+    stream.write_all(response_string.as_bytes()).unwrap();
+    
+    // Write body separately since it might be binary
+    stream.write_all(&response.body).unwrap();
 }
 
 fn main() {
